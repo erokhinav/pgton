@@ -1,4 +1,4 @@
-Extension for Postgres to work with TON addresses.
+Extension for PostgreSQL to work with TON addresses.
 
 
 ``sudo make install``
