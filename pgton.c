@@ -260,16 +260,12 @@ unsigned short crc16_xmodem(const unsigned char* data_p, unsigned int length) {
     return crc;
 }
 
-Datum tonaddr_to_base64(PG_FUNCTION_ARGS) {
-    TonAddr *addr = (TonAddr*) PG_GETARG_POINTER(0);
-    
+static char* tonaddr_to_base64_internal(TonAddr *addr) {
     if (addr->workchain == 123456) {
-        char *result = psprintf("addr_none");
-        PG_RETURN_CSTRING(result);
+        return pstrdup("addr_none");
     }
     if (addr->workchain == 123457) {
-        char *result = psprintf("addr_extern");
-        PG_RETURN_CSTRING(result);
+        return pstrdup("addr_extern");
     }
 
     char *checksumData = (char *) palloc(34);
@@ -287,21 +283,30 @@ Datum tonaddr_to_base64(PG_FUNCTION_ARGS) {
     size_t base64_buffer_size = pg_b64_enc_len(36) + 1;
     char *base64_result = palloc(base64_buffer_size);
     int base64_len = pg_b64_encode((const char *)address, 36, base64_result, base64_buffer_size - 1);
-    base64_result[base64_len] = '\0';
 
-    // Convert to URL-safe base64
+    // Convert to URL-safe base64 and remove padding
+    int url_safe_len = 0;
     for (int i = 0; i < base64_len; i++) {
         if (base64_result[i] == '+') {
-            base64_result[i] = '-';
+            base64_result[url_safe_len++] = '-';
         } else if (base64_result[i] == '/') {
-            base64_result[i] = '_';
+            base64_result[url_safe_len++] = '_';
+        } else if (base64_result[i] != '=') {
+            base64_result[url_safe_len++] = base64_result[i];
         }
     }
+    base64_result[url_safe_len] = '\0';
 
     pfree(checksumData);
     pfree(address);
 
-    PG_RETURN_CSTRING(base64_result);
+    return base64_result;
+}
+
+Datum tonaddr_to_base64(PG_FUNCTION_ARGS) {
+    TonAddr *addr = (TonAddr*) PG_GETARG_POINTER(0);
+    char *result = tonaddr_to_base64_internal(addr);
+    PG_RETURN_CSTRING(result);
 }
 
 Datum raw_to_base64(PG_FUNCTION_ARGS) {
@@ -328,46 +333,118 @@ Datum raw_to_base64(PG_FUNCTION_ARGS) {
         }
     }
 
-    if (addr.workchain == 123456) {
-        char *result = psprintf("addr_none");
-        PG_RETURN_CSTRING(result);
-    }
-    if (addr.workchain == 123457) {
-        char *result = psprintf("addr_extern");
-        PG_RETURN_CSTRING(result);
-    }
-
-    char *checksumData = (char *) palloc(34);
-    checksumData[0] = 17;
-    checksumData[1] = (char)(addr.workchain);
-    memcpy(checksumData + 2, addr.addr, 32);
-
-    char *address = (char *) palloc(36);
-    memcpy(address, checksumData, 34);
-    
-    unsigned short crc = crc16_xmodem((unsigned char *)checksumData, 34);
-    unsigned short crc_be = htons(crc);
-    memcpy(address + 34, &crc_be, 2);
-
-    size_t base64_buffer_size = pg_b64_enc_len(36) + 1;
-    char *base64_result = palloc(base64_buffer_size);
-    int base64_len = pg_b64_encode((const char *)address, 36, base64_result, base64_buffer_size - 1);
-    base64_result[base64_len] = '\0';
-
-    // Convert to URL-safe base64
-    for (int i = 0; i < base64_len; i++) {
-        if (base64_result[i] == '+') {
-            base64_result[i] = '-';
-        } else if (base64_result[i] == '/') {
-            base64_result[i] = '_';
-        }
-    }
-
-    pfree(checksumData);
-    pfree(address);
-
-    PG_RETURN_CSTRING(base64_result);
+    char *result = tonaddr_to_base64_internal(&addr);
+    PG_RETURN_CSTRING(result);
 }
+
+// Datum tonaddr_to_base64(PG_FUNCTION_ARGS) {
+//     TonAddr *addr = (TonAddr*) PG_GETARG_POINTER(0);
+    
+//     if (addr->workchain == 123456) {
+//         char *result = psprintf("addr_none");
+//         PG_RETURN_CSTRING(result);
+//     }
+//     if (addr->workchain == 123457) {
+//         char *result = psprintf("addr_extern");
+//         PG_RETURN_CSTRING(result);
+//     }
+
+//     char *checksumData = (char *) palloc(34);
+//     checksumData[0] = 17;
+//     checksumData[1] = (char)(addr->workchain);
+//     memcpy(checksumData + 2, addr->addr, 32);
+
+//     char *address = (char *) palloc(36);
+//     memcpy(address, checksumData, 34);
+    
+//     unsigned short crc = crc16_xmodem((unsigned char *)checksumData, 34);
+//     unsigned short crc_be = htons(crc);
+//     memcpy(address + 34, &crc_be, 2);
+
+//     size_t base64_buffer_size = pg_b64_enc_len(36) + 1;
+//     char *base64_result = palloc(base64_buffer_size);
+//     int base64_len = pg_b64_encode((const char *)address, 36, base64_result, base64_buffer_size - 1);
+//     base64_result[base64_len] = '\0';
+
+//     // Convert to URL-safe base64
+//     for (int i = 0; i < base64_len; i++) {
+//         if (base64_result[i] == '+') {
+//             base64_result[i] = '-';
+//         } else if (base64_result[i] == '/') {
+//             base64_result[i] = '_';
+//         }
+//     }
+
+//     pfree(checksumData);
+//     pfree(address);
+
+//     PG_RETURN_CSTRING(base64_result);
+// }
+
+// Datum raw_to_base64(PG_FUNCTION_ARGS) {
+//     char *str = PG_GETARG_CSTRING(0);
+//     TonAddr addr;
+
+//     if (strcmp(str, "addr_none") == 0) {
+//         addr.workchain = 123456;
+//     } else if (strcmp(str, "addr_extern") == 0) {
+//         addr.workchain = 123457;
+//     } else {
+//         int pos;
+//         if (sscanf(str, "%d:%n", &addr.workchain, &pos) != 1) {
+//             ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+//                 errmsg("invalid workchain for type %s: \"%s\"", "tonaddr", str)));
+//         }
+//         if (strlen(str) - pos != 64) {
+//             ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+//                 errmsg("wrong address length for type %s: \"%d\" != 64", "tonaddr", (int)(strlen(str) - pos))));
+//         }
+//         if (hex_decode(str + pos, 64, addr.addr) < 0) {
+//             ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+//                 errmsg("failed to decode hex value for type %s", "tonaddr")));
+//         }
+//     }
+
+//     if (addr.workchain == 123456) {
+//         char *result = psprintf("addr_none");
+//         PG_RETURN_CSTRING(result);
+//     }
+//     if (addr.workchain == 123457) {
+//         char *result = psprintf("addr_extern");
+//         PG_RETURN_CSTRING(result);
+//     }
+
+//     char *checksumData = (char *) palloc(34);
+//     checksumData[0] = 17;
+//     checksumData[1] = (char)(addr.workchain);
+//     memcpy(checksumData + 2, addr.addr, 32);
+
+//     char *address = (char *) palloc(36);
+//     memcpy(address, checksumData, 34);
+    
+//     unsigned short crc = crc16_xmodem((unsigned char *)checksumData, 34);
+//     unsigned short crc_be = htons(crc);
+//     memcpy(address + 34, &crc_be, 2);
+
+//     size_t base64_buffer_size = pg_b64_enc_len(36) + 1;
+//     char *base64_result = palloc(base64_buffer_size);
+//     int base64_len = pg_b64_encode((const char *)address, 36, base64_result, base64_buffer_size - 1);
+//     base64_result[base64_len] = '\0';
+
+//     // Convert to URL-safe base64
+//     for (int i = 0; i < base64_len; i++) {
+//         if (base64_result[i] == '+') {
+//             base64_result[i] = '-';
+//         } else if (base64_result[i] == '/') {
+//             base64_result[i] = '_';
+//         }
+//     }
+
+//     pfree(checksumData);
+//     pfree(address);
+
+//     PG_RETURN_CSTRING(base64_result);
+// }
 
 Datum tonaddr_send(PG_FUNCTION_ARGS) {
     StringInfo buf = (StringInfo) PG_GETARG_POINTER(0);
