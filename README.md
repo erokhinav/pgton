@@ -1,3 +1,6 @@
-sudo make install
+Extension for Postgres to work with TON addresses.
 
-psql> CREATE EXTENSION pgton;
+
+``sudo make install``
+
+``psql> CREATE EXTENSION pgton;``
