@@ -101,6 +101,11 @@ CREATE OR REPLACE FUNCTION raw_to_base64(cstring)
    AS 'MODULE_PATHNAME', 'raw_to_base64'
    LANGUAGE C IMMUTABLE STRICT;
 
+CREATE OR REPLACE FUNCTION base64_to_raw(cstring)
+   RETURNS cstring
+   AS 'MODULE_PATHNAME', 'base64_to_raw'
+   LANGUAGE C IMMUTABLE STRICT;
+
 CREATE FUNCTION tonaddr_recv(internal)
    RETURNS tonaddr
    AS 'MODULE_PATHNAME', 'tonaddr_recv'

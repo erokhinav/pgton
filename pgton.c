@@ -130,6 +130,7 @@ PG_FUNCTION_INFO_V1(tonaddr_in);
 PG_FUNCTION_INFO_V1(tonaddr_out);
 PG_FUNCTION_INFO_V1(tonaddr_to_base64);
 PG_FUNCTION_INFO_V1(raw_to_base64);
+PG_FUNCTION_INFO_V1(base64_to_raw);
 PG_FUNCTION_INFO_V1(tonaddr_send);
 PG_FUNCTION_INFO_V1(tonaddr_recv);
 
@@ -334,6 +335,75 @@ Datum raw_to_base64(PG_FUNCTION_ARGS) {
     }
 
     char *result = tonaddr_to_base64_internal(&addr);
+    PG_RETURN_CSTRING(result);
+}
+
+Datum base64_to_raw(PG_FUNCTION_ARGS) {
+    char *base64_str = PG_GETARG_CSTRING(0);
+    
+    if (strcmp(base64_str, "addr_none") == 0) {
+        char *result = pstrdup("addr_none");
+        PG_RETURN_CSTRING(result);
+    }
+    if (strcmp(base64_str, "addr_extern") == 0) {
+        char *result = pstrdup("addr_extern");
+        PG_RETURN_CSTRING(result);
+    }
+
+    size_t len = strlen(base64_str);
+    char *std_base64 = palloc(len + 4);
+    int std_len = 0;
+    
+    for (size_t i = 0; i < len; i++) {
+        if (base64_str[i] == '-') {
+            std_base64[std_len++] = '+';
+        } else if (base64_str[i] == '_') {
+            std_base64[std_len++] = '/';
+        } else {
+            std_base64[std_len++] = base64_str[i];
+        }
+    }
+    
+    while (std_len % 4 != 0) {
+        std_base64[std_len++] = '=';
+    }
+    std_base64[std_len] = '\0';
+
+    char decoded[36];
+    if (pg_b64_decode(std_base64, std_len, decoded, 36) != 36) {
+        pfree(std_base64);
+        ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+            errmsg("invalid base64 input for type %s", "tonaddr")));
+    }
+    pfree(std_base64);
+
+    unsigned short received_crc;
+    memcpy(&received_crc, decoded + 34, 2);
+    received_crc = ntohs(received_crc);
+    
+    unsigned short calculated_crc = crc16_xmodem((unsigned char *)decoded, 34);
+    
+    if (received_crc != calculated_crc) {
+        ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+            errmsg("invalid checksum in base64 address")));
+    }
+
+    if (decoded[0] != 17 && decoded[0] != 81) {
+        ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+            errmsg("invalid address tag %d", decoded[0])));
+    }
+
+    int32 workchain = (int8)decoded[1];
+    char addr_hex[65];
+    addr_hex[64] = '\0';
+    
+    if (hex_encode(decoded + 2, 32, addr_hex) < 0) {
+        ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+            errmsg("failed to encode address as hex")));
+    }
+
+    char *result = psprintf("%d:%s", workchain, addr_hex);
+
     PG_RETURN_CSTRING(result);
 }
 
