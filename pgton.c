@@ -158,6 +158,52 @@ Datum tonaddr_in(PG_FUNCTION_ARGS) {
         result->workchain = 123457;
         PG_RETURN_POINTER(result);
     }
+
+    if (strchr(str, ':') == NULL) {
+        size_t b64_len = strlen(str);
+        char *std_base64 = palloc(b64_len + 4);
+        int std_len = 0;
+        for (size_t i = 0; i < b64_len; i++) {
+            if (str[i] == '-') {
+                std_base64[std_len++] = '+';
+            } else if (str[i] == '_') {
+                std_base64[std_len++] = '/';
+            } else {
+                std_base64[std_len++] = str[i];
+            }
+        }
+        while (std_len % 4 != 0) {
+            std_base64[std_len++] = '=';
+        }
+        std_base64[std_len] = '\0';
+
+        char decoded[36];
+        if (pg_b64_decode(std_base64, std_len, decoded, 36) != 36) {
+            pfree(std_base64);
+            pfree(result);
+            ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                errmsg("invalid base64 input for type %s", "tonaddr")));
+        }
+        pfree(std_base64);
+
+        unsigned short received_crc;
+        memcpy(&received_crc, decoded + 34, 2);
+        received_crc = ntohs(received_crc);
+        unsigned short calculated_crc = crc16_xmodem((unsigned char *)decoded, 34);
+        if (received_crc != calculated_crc) {
+            pfree(result);
+            ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                errmsg("invalid checksum in base64 address")));
+        }
+        if (decoded[0] != 17 && decoded[0] != 81) {
+            pfree(result);
+            ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                errmsg("invalid address tag %d", decoded[0])));
+        }
+        result->workchain = (int8)decoded[1];
+        memcpy(result->addr, decoded + 2, 32);
+        PG_RETURN_POINTER(result);
+    }
     
     if (sscanf(str, "%d:%n", &result->workchain, &pos) != 1) {
         pfree(result);
@@ -262,6 +308,10 @@ unsigned short crc16_xmodem(const unsigned char* data_p, unsigned int length) {
 }
 
 static char* tonaddr_to_base64_internal(TonAddr *addr) {
+    return tonaddr_to_base64_with_tag(addr, 17);
+}
+
+static char* tonaddr_to_base64_with_tag(TonAddr *addr, unsigned char tag) {
     if (addr->workchain == 123456) {
         return pstrdup("addr_none");
     }
@@ -270,7 +320,7 @@ static char* tonaddr_to_base64_internal(TonAddr *addr) {
     }
 
     char *checksumData = (char *) palloc(34);
-    checksumData[0] = 17;
+    checksumData[0] = (char)tag;
     checksumData[1] = (char)(addr->workchain);
     memcpy(checksumData + 2, addr->addr, 32);
 
@@ -334,7 +384,13 @@ Datum raw_to_base64(PG_FUNCTION_ARGS) {
         }
     }
 
-    char *result = tonaddr_to_base64_internal(&addr);
+    bool return_bounceable = true;
+    if (PG_NARGS() >= 2 && !PG_ARGISNULL(1)) {
+        return_bounceable = PG_GETARG_BOOL(1);
+    }
+    unsigned char tag = return_bounceable ? 17 : 81;
+
+    char *result = tonaddr_to_base64_with_tag(&addr, tag);
     PG_RETURN_CSTRING(result);
 }
 
